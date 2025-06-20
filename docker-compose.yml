@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  mrz-api:
+    build: .
+    container_name: mrz-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
