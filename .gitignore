@@ -54,7 +54,6 @@ dist/
 .eggs/
 
 # Tesseract data (if generated)
-*.traineddata
 
 # OS files
 .DS_Store
