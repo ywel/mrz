@@ -78,8 +78,8 @@ async def extract_mrz(request: ImageBase64Request):
 
         data = mrz.to_dict()
 
-        # Step 3: Parse names with dual-format support
-        raw_name = data.get("surname", "") or data.get("names", "")
+        # Step 3: Special handling for Kenyan ID format
+        raw_name = data.get("surname", "")
         given_name, surname = parse_kenyan_names(raw_name)
 
         # Step 4: Return structured response
