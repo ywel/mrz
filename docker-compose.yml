@@ -1,10 +1,30 @@
+version: "3.9"
 
 services:
   mrz-api:
     build: .
     container_name: mrz-api
     ports:
-      - "8000:8000"
+      - "44766:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      - MYSQL_HOST=mysql
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=H@kunapa55
+      - MYSQL_DATABASE=mrzdb
+    depends_on:
+      - mysql
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: H@kunapa55
+      MYSQL_DATABASE: mrzdb
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
     restart: unless-stopped

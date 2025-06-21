@@ -6,6 +6,7 @@ __pycache__/
 *.pyc
 *.so
 
+mysql_data/
 # Virtual environments
 .venv/
 env/

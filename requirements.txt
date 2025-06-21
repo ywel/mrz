@@ -25,6 +25,7 @@ MarkupSafe==3.0.2
 matplotlib==3.10.3
 mdurl==0.1.2
 mrz==0.6.2
+mysql-connector-python==9.3.0
 networkx==3.5
 numpy==2.3.0
 opencv-python==4.11.0.86
