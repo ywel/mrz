@@ -31,21 +31,32 @@ def format_date(raw_date: str):
         return None
 
 def parse_kenyan_names(raw_name: str):
-    # Split MRZ name string, ignore empty strings and "L"
-    name_parts = [p for p in raw_name.split('<') if p and p != 'L']
-
-    if len(name_parts) >= 3:
-        # 3rd name is surname
-        surname = name_parts[2]
-        given_names = " ".join([p for i, p in enumerate(name_parts) if i != 2])
-    elif len(name_parts) >= 1:
-        # fallback: last is surname, others are given names
-        surname = name_parts[-1]
-        given_names = " ".join(name_parts[:-1])
-    else:
-        surname = ""
-        given_names = ""
-
+    """
+    Parse Kenyan names from MRZ format with improved robustness.
+    Handles cases where:
+    - Surname might be last non-L component
+    - Multiple separators (<<<)
+    - Trailing L characters
+    - Single component names
+    - Empty cases
+    """
+    # Split and clean components
+    name_parts = [p.strip() for p in raw_name.split('<') if p.strip() and p.strip() != 'L']
+    
+    if not name_parts:
+        return "", ""
+    
+    # Default case: last non-L component is surname
+    surname = name_parts[-1]
+    given_names = " ".join(name_parts[:-1]) if len(name_parts) > 1 else ""
+    
+    # Special case: If we have something like "SURNAME<<GIVEN1<GIVEN2"
+    # where surname appears first (some passport formats)
+    if len(name_parts) >= 3 and name_parts[0].isupper() and ' ' not in name_parts[0]:
+        # Check if first part looks more like a surname
+        surname = name_parts[0]
+        given_names = " ".join(name_parts[1:])
+    
     return given_names.strip(), surname.strip()
 
 @app.post("/mrz/")
@@ -67,8 +78,9 @@ async def extract_mrz(request: ImageBase64Request):
 
         data = mrz.to_dict()
 
-        # Step 3: Parse names (Kenyan ID logic)
-        given_name, surname = parse_kenyan_names(data.get("surname", ""))
+        # Step 3: Parse names with dual-format support
+        raw_name = data.get("surname", "") or data.get("names", "")
+        given_name, surname = parse_kenyan_names(raw_name)
 
         # Step 4: Return structured response
         return {
@@ -89,5 +101,5 @@ async def extract_mrz(request: ImageBase64Request):
         }
 
     except Exception as e:
-        logger.error(f"Error during MRZ extraction: {e}")
+        logger.error(f"Error during MRZ extraction: {e}", exc_info=True)
         return {"status": "FAILURE", "error": str(e)}
