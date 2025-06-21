@@ -4,7 +4,7 @@ services:
     build: .
     container_name: mrz-api
     ports:
-      - "8000:8000"
+      - "44766:8000"
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
