@@ -53,15 +53,16 @@ class ImageBase64Request(BaseModel):
 class RegistrationRequest(BaseModel):
     fullName: constr(min_length=2, max_length=255, strip_whitespace=True)
     email: EmailStr
-    mobileNumber: constr(regex=r"^\d{10,15}$")
+    mobileNumber: constr(pattern=r"^\d{10,15}$")
     areaOfResidence: constr(min_length=2, max_length=255, strip_whitespace=True)
     emergencyContactName: constr(min_length=2, max_length=255, strip_whitespace=True)
     relationship: constr(min_length=2, max_length=100, strip_whitespace=True)
-    emergencyContactMobileNumber: constr(regex=r"^\d{10,15}$")
+    emergencyContactMobileNumber: constr(pattern=r"^\d{10,15}$")
 
     @field_validator("fullName", "areaOfResidence", "emergencyContactName", "relationship")
     @classmethod
     def no_special_chars(cls, v):
+        import re
         if not re.match(r"^[\w\s\-\.\']+$", v):
             raise ValueError("Field contains invalid characters")
         return v
@@ -195,7 +196,7 @@ async def extract_mrz(
     """Endpoint for extracting MRZ data from ID images."""
     try:
         # Step 1: Decode base64 and save temporary image
-        b64_data = request.image_base64
+        b64_data = body.image_base64  # <-- FIXED
         logger.info(f"Received base64 data of length: {len(b64_data)}")
         
         # Clean and validate base64 data
