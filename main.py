@@ -57,6 +57,10 @@ class PaginatedRegistrations(BaseModel):
     limit: int
     data: List[RegistrationResponse]
 
+class PaginationRequest(BaseModel):
+    skip: int = 0
+    limit: int = 10
+
 def get_db_connection():
     return mysql.connector.connect(
         host=MYSQL_HOST,
@@ -252,35 +256,23 @@ async def register_user(data: RegistrationRequest):
 @app.post(
     "/registrations/",
     response_model=PaginatedRegistrations,
-    summary="Get a paginated list of registrations",
+    summary="Get a paginated list of registrations (POST)",
     description="""
-Returns a paginated list of registrations.
+Returns a paginated list of registrations using a JSON body.
 
-**Query Parameters:**
+**Request Body:**
 - `skip`: Number of records to skip (default: 0)
 - `limit`: Maximum number of records to return (default: 10, max: 100)
-
-**Response:**
-- `total`: Total number of registrations in the database
-- `skip`: Number of skipped records (offset)
-- `limit`: Number of records returned
-- `data`: List of registration records
 """
 )
-async def list_registrations(
-    skip: int = Query(0, ge=0, description="Number of records to skip"),
-    limit: int = Query(10, ge=1, le=100, description="Max records to return"),
-):
-    """
-    Paginated list of registrations with total count.
-    """
+async def list_registrations_post(body: PaginationRequest):
     try:
+        skip = body.skip
+        limit = min(body.limit, 100)
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        # Get total count
         cursor.execute("SELECT COUNT(*) as total FROM registrations")
         total = cursor.fetchone()["total"]
-        # Get paginated data
         cursor.execute(
             "SELECT * FROM registrations ORDER BY id DESC LIMIT %s OFFSET %s", (limit, skip)
         )
