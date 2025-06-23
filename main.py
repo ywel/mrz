@@ -249,7 +249,7 @@ async def register_user(data: RegistrationRequest):
         logger.error(f"Registration failed: {e}")
         raise HTTPException(status_code=500, detail="Registration failed")
 
-@app.get(
+@app.post(
     "/registrations/",
     response_model=PaginatedRegistrations,
     summary="Get a paginated list of registrations",
