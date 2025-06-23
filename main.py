@@ -1,12 +1,14 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query
+from pydantic import BaseModel, EmailStr
+import mysql.connector
+import logging
+import os
 import base64
 import tempfile
-import logging
 import re
 from passporteye import read_mrz
 from datetime import datetime
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 app = FastAPI()
 
@@ -21,8 +23,47 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# MySQL connection settings (use environment variables in production)
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "password")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "mrzdb")
+
 class ImageBase64Request(BaseModel):
     image_base64: str
+
+class RegistrationRequest(BaseModel):
+    fullName: str
+    email: EmailStr
+    mobileNumber: str
+    areaOfResidence: str
+    emergencyContactName: str
+    relationship: str
+    emergencyContactMobileNumber: str
+
+class RegistrationResponse(BaseModel):
+    id: int
+    fullName: str
+    email: EmailStr
+    mobileNumber: str
+    areaOfResidence: str
+    emergencyContactName: str
+    relationship: str
+    emergencyContactMobileNumber: str
+
+class PaginatedRegistrations(BaseModel):
+    total: int
+    skip: int
+    limit: int
+    data: List[RegistrationResponse]
+
+def get_db_connection():
+    return mysql.connector.connect(
+        host=MYSQL_HOST,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database=MYSQL_DATABASE
+    )
 
 def clean_base64(b64_string: str) -> Tuple[str, str]:
     """Extract base64 data and extension from URI if present."""
@@ -90,15 +131,16 @@ def parse_kenyan_names(raw_name: str) -> Tuple[str, str]:
 async def extract_mrz(request: ImageBase64Request):
     """Endpoint for extracting MRZ data from ID images."""
     try:
-        logger.info("Starting MRZ extraction request")
+        # Step 1: Decode base64 and save temporary image
+        b64_data = request.image_base64
+        logger.info(f"Received base64 data of length: {len(b64_data)}")
         
-        # Step 1: Process image data
-        b64_data, ext = clean_base64(request.image_base64)
-        logger.debug(f"Image type: {ext}, Data length: {len(b64_data)}")
+        # Clean and validate base64 data
+        image_data, ext = clean_base64(b64_data)
+        logger.info(f"Cleaned base64 data, extracted extension: {ext}")
         
         try:
-            image_data = base64.b64decode(b64_data)
-            logger.debug("Base64 decoded successfully")
+            image_data = base64.b64decode(image_data)
         except Exception as e:
             logger.error(f"Base64 decoding failed: {str(e)}")
             return {"status": "FAILURE", "error": "Invalid base64 data"}
@@ -164,6 +206,96 @@ async def extract_mrz(request: ImageBase64Request):
     except Exception as e:
         logger.critical(f"Unexpected error in MRZ extraction: {str(e)}", exc_info=True)
         return {"status": "FAILURE", "error": "Internal server error"}
+
+@app.post("/register/")
+async def register_user(data: RegistrationRequest):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Ensure table exists
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS registrations (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                fullName VARCHAR(255),
+                email VARCHAR(255),
+                mobileNumber VARCHAR(20),
+                areaOfResidence VARCHAR(255),
+                emergencyContactName VARCHAR(255),
+                relationship VARCHAR(100),
+                emergencyContactMobileNumber VARCHAR(20)
+            )
+        """)
+        # Insert data
+        cursor.execute("""
+            INSERT INTO registrations (
+                fullName, email, mobileNumber, areaOfResidence,
+                emergencyContactName, relationship, emergencyContactMobileNumber
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (
+            data.fullName,
+            data.email,
+            data.mobileNumber,
+            data.areaOfResidence,
+            data.emergencyContactName,
+            data.relationship,
+            data.emergencyContactMobileNumber
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Registered user: {data.fullName}")
+        return {"message": "Registration successful"}
+    except Exception as e:
+        logger.error(f"Registration failed: {e}")
+        raise HTTPException(status_code=500, detail="Registration failed")
+
+@app.get(
+    "/registrations/",
+    response_model=PaginatedRegistrations,
+    summary="Get a paginated list of registrations",
+    description="""
+Returns a paginated list of registrations.
+
+**Query Parameters:**
+- `skip`: Number of records to skip (default: 0)
+- `limit`: Maximum number of records to return (default: 10, max: 100)
+
+**Response:**
+- `total`: Total number of registrations in the database
+- `skip`: Number of skipped records (offset)
+- `limit`: Number of records returned
+- `data`: List of registration records
+"""
+)
+async def list_registrations(
+    skip: int = Query(0, ge=0, description="Number of records to skip"),
+    limit: int = Query(10, ge=1, le=100, description="Max records to return"),
+):
+    """
+    Paginated list of registrations with total count.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        # Get total count
+        cursor.execute("SELECT COUNT(*) as total FROM registrations")
+        total = cursor.fetchone()["total"]
+        # Get paginated data
+        cursor.execute(
+            "SELECT * FROM registrations ORDER BY id DESC LIMIT %s OFFSET %s", (limit, skip)
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "data": rows
+        }
+    except Exception as e:
+        logger.error(f"Error fetching registrations: {e}")
+        raise HTTPException(status_code=500, detail="Could not fetch registrations")
 
 if __name__ == "__main__":
     import uvicorn

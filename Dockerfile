@@ -12,9 +12,7 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install -r requirements.txt
-
 COPY mrz.traineddata /usr/share/tesseract-ocr/5/tessdata/
 COPY main.py .
-# Copy other necessary files (models, static, etc.) as needed
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
