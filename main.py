@@ -51,6 +51,12 @@ class RegistrationResponse(BaseModel):
     relationship: str
     emergencyContactMobileNumber: str
 
+class PaginatedRegistrations(BaseModel):
+    total: int
+    skip: int
+    limit: int
+    data: List[RegistrationResponse]
+
 def get_db_connection():
     return mysql.connector.connect(
         host=MYSQL_HOST,
@@ -243,21 +249,50 @@ async def register_user(data: RegistrationRequest):
         logger.error(f"Registration failed: {e}")
         raise HTTPException(status_code=500, detail="Registration failed")
 
-@app.get("/registrations/", response_model=List[RegistrationResponse])
+@app.get(
+    "/registrations/",
+    response_model=PaginatedRegistrations,
+    summary="Get a paginated list of registrations",
+    description="""
+Returns a paginated list of registrations.
+
+**Query Parameters:**
+- `skip`: Number of records to skip (default: 0)
+- `limit`: Maximum number of records to return (default: 10, max: 100)
+
+**Response:**
+- `total`: Total number of registrations in the database
+- `skip`: Number of skipped records (offset)
+- `limit`: Number of records returned
+- `data`: List of registration records
+"""
+)
 async def list_registrations(
     skip: int = Query(0, ge=0, description="Number of records to skip"),
     limit: int = Query(10, ge=1, le=100, description="Max records to return"),
 ):
+    """
+    Paginated list of registrations with total count.
+    """
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
+        # Get total count
+        cursor.execute("SELECT COUNT(*) as total FROM registrations")
+        total = cursor.fetchone()["total"]
+        # Get paginated data
         cursor.execute(
             "SELECT * FROM registrations ORDER BY id DESC LIMIT %s OFFSET %s", (limit, skip)
         )
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
-        return rows
+        return {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "data": rows
+        }
     except Exception as e:
         logger.error(f"Error fetching registrations: {e}")
         raise HTTPException(status_code=500, detail="Could not fetch registrations")
