@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel, EmailStr, constr, field_validator
+from pydantic import BaseModel, EmailStr, constr, field_validator, Field
 import mysql.connector
 import logging
 import os
@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 from functools import wraps
 from time import time
 from collections import defaultdict
+from fastapi import Request, HTTPException
 import secrets
 
 app = FastAPI()
@@ -340,7 +341,7 @@ async def list_registrations_post(
         cursor.execute("SELECT COUNT(*) as total FROM registrations")
         total = cursor.fetchone()["total"]
         cursor.execute(
-            "SELECT * FROM registrations ORDER BY id ASC LIMIT %s OFFSET %s", (limit, skip)
+            "SELECT * FROM registrations WHERE clicked=0 ORDER BY id ASC LIMIT %s OFFSET %s", (limit, skip)
         )
         rows = cursor.fetchall()
         cursor.close()
@@ -354,6 +355,66 @@ async def list_registrations_post(
     except Exception as e:
         logger.error(f"Error fetching registrations: {e}")
         raise HTTPException(status_code=500, detail="Could not fetch registrations")
+
+from pydantic import BaseModel, Field
+
+class UpdateClickedRequest(BaseModel):
+    id: int = Field(..., gt=0, description="ID of the registration to update")
+
+@app.post("/registrations/update_clicked/")
+async def update_clicked_column(
+    request: Request,
+    body: UpdateClickedRequest,
+    username: str = Depends(verify_basic_auth)
+):
+    rate_limiter(request)
+    ip = request.client.host
+    logger.info(f"Update 'clicked' column request from IP: {ip}, user: {username}, id: {body.id}")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        # Ensure the 'clicked' column exists
+        cursor.execute("""
+            ALTER TABLE registrations
+            ADD COLUMN IF NOT EXISTS clicked INT DEFAULT 0
+        """)
+        # Update the clicked column for the given id
+        cursor.execute(
+            "UPDATE registrations SET clicked = 10 WHERE id = %s", (body.id,)
+        )
+        conn.commit()
+        affected = cursor.rowcount
+        cursor.close()
+        conn.close()
+        if affected == 0:
+            logger.warning(f"No registration found with id {body.id}")
+            return {"status": "error", "message": f"No registration found with id {body.id}"}
+        logger.info(f"Updated 'clicked' column for id {body.id}")
+        return {"status": "success", "message": f"Clicked column updated for id {body.id}"}
+    except Exception as e:
+        logger.error(f"Error updating clicked column: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update clicked column")
+
+# Rate limiting setup (simple in-memory, per-IP)
+RATE_LIMIT = int(os.getenv("RATE_LIMIT", 30))  # requests
+RATE_PERIOD = int(os.getenv("RATE_PERIOD", 60))  # seconds
+
+ip_request_times = defaultdict(list)
+
+def rate_limiter(request: Request):
+    ip = request.client.host
+    now = time()
+    window_start = now - RATE_PERIOD
+    # Remove timestamps outside the window
+    ip_request_times[ip] = [t for t in ip_request_times[ip] if t > window_start]
+    if len(ip_request_times[ip]) >= RATE_LIMIT:
+        logger.warning(f"Rate limit exceeded for IP: {ip}")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded: {RATE_LIMIT} requests per {RATE_PERIOD} seconds"
+        )
+    ip_request_times[ip].append(now)
+    logger.info(f"Request from IP: {ip} - {len(ip_request_times[ip])} requests in window")
 
 if __name__ == "__main__":
     import uvicorn
