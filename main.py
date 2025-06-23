@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, EmailStr
+from fastapi import FastAPI, HTTPException, Query, Request, Depends, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from pydantic import BaseModel, EmailStr, constr, field_validator
 import mysql.connector
 import logging
 import os
@@ -9,6 +10,10 @@ import re
 from passporteye import read_mrz
 from datetime import datetime
 from typing import List, Optional, Tuple
+from functools import wraps
+from time import time
+from collections import defaultdict
+import secrets
 
 app = FastAPI()
 
@@ -30,16 +35,35 @@ MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "password")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "mrzdb")
 
 class ImageBase64Request(BaseModel):
-    image_base64: str
+    image_base64: constr(min_length=100, max_length=10_000_000, strip_whitespace=True)
+
+    @field_validator("image_base64")
+    @classmethod
+    def validate_base64(cls, v):
+        b64_data = v
+        if b64_data.startswith("data:image/"):
+            b64_data = b64_data.split(",", 1)[-1]
+        try:
+            base64.b64decode(b64_data, validate=True)
+        except Exception:
+            raise ValueError("Invalid base64-encoded image data")
+        return v
 
 class RegistrationRequest(BaseModel):
-    fullName: str
+    fullName: constr(min_length=2, max_length=255, strip_whitespace=True)
     email: EmailStr
-    mobileNumber: str
-    areaOfResidence: str
-    emergencyContactName: str
-    relationship: str
-    emergencyContactMobileNumber: str
+    mobileNumber: constr(regex=r"^\d{10,15}$")
+    areaOfResidence: constr(min_length=2, max_length=255, strip_whitespace=True)
+    emergencyContactName: constr(min_length=2, max_length=255, strip_whitespace=True)
+    relationship: constr(min_length=2, max_length=100, strip_whitespace=True)
+    emergencyContactMobileNumber: constr(regex=r"^\d{10,15}$")
+
+    @field_validator("fullName", "areaOfResidence", "emergencyContactName", "relationship")
+    @classmethod
+    def no_special_chars(cls, v):
+        if not re.match(r"^[\w\s\-\.\']+$", v):
+            raise ValueError("Field contains invalid characters")
+        return v
 
 class RegistrationResponse(BaseModel):
     id: int
@@ -60,6 +84,20 @@ class PaginatedRegistrations(BaseModel):
 class PaginationRequest(BaseModel):
     skip: int = 0
     limit: int = 10
+
+    @field_validator("skip")
+    @classmethod
+    def skip_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("skip must be non-negative")
+        return v
+
+    @field_validator("limit")
+    @classmethod
+    def limit_range(cls, v):
+        if not (1 <= v <= 100):
+            raise ValueError("limit must be between 1 and 100")
+        return v
 
 def get_db_connection():
     return mysql.connector.connect(
@@ -131,8 +169,28 @@ def parse_kenyan_names(raw_name: str) -> Tuple[str, str]:
     logger.info(f"Parsed names - Given: '{given_names}', Surname: '{surname}'")
     return given_names.strip(), surname.strip()
 
+security = HTTPBasic()
+BASIC_AUTH_USERNAME = os.getenv("BASIC_AUTH_USERNAME", "g86EGP0CMY")
+BASIC_AUTH_PASSWORD = os.getenv("BASIC_AUTH_PASSWORD", "gz2MR9vZfq4xXWPouHxqRsL5ckbymCjM")
+
+def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)):
+    correct_username = secrets.compare_digest(credentials.username, BASIC_AUTH_USERNAME)
+    correct_password = secrets.compare_digest(credentials.password, BASIC_AUTH_PASSWORD)
+    if not (correct_username and correct_password):
+        logger.warning(f"Failed login attempt for user: {credentials.username}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
 @app.post("/mrz/")
-async def extract_mrz(request: ImageBase64Request):
+async def extract_mrz(
+    request: Request,
+    body: ImageBase64Request,
+    username: str = Depends(verify_basic_auth)
+):
     """Endpoint for extracting MRZ data from ID images."""
     try:
         # Step 1: Decode base64 and save temporary image
@@ -212,7 +270,11 @@ async def extract_mrz(request: ImageBase64Request):
         return {"status": "FAILURE", "error": "Internal server error"}
 
 @app.post("/register/")
-async def register_user(data: RegistrationRequest):
+async def register_user(
+    request: Request,
+    data: RegistrationRequest,
+    username: str = Depends(verify_basic_auth)
+):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -265,7 +327,11 @@ Returns a paginated list of registrations using a JSON body.
 - `limit`: Maximum number of records to return (default: 10, max: 100)
 """
 )
-async def list_registrations_post(body: PaginationRequest):
+async def list_registrations_post(
+    request: Request,
+    body: PaginationRequest,
+    username: str = Depends(verify_basic_auth)
+):
     try:
         skip = body.skip
         limit = min(body.limit, 100)
@@ -274,7 +340,7 @@ async def list_registrations_post(body: PaginationRequest):
         cursor.execute("SELECT COUNT(*) as total FROM registrations")
         total = cursor.fetchone()["total"]
         cursor.execute(
-            "SELECT * FROM registrations ORDER BY id DESC LIMIT %s OFFSET %s", (limit, skip)
+            "SELECT * FROM registrations ORDER BY id ASC LIMIT %s OFFSET %s", (limit, skip)
         )
         rows = cursor.fetchall()
         cursor.close()
